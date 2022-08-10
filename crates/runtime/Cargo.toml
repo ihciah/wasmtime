@@ -25,6 +25,8 @@ rand = "0.8.3"
 anyhow = "1.0.38"
 memfd = { version = "0.6.1", optional = true }
 paste = "1.0.3"
+priority-queue = "1.2.3"
+slab = "0.4.7"
 encoding_rs = { version = "0.8.31", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]

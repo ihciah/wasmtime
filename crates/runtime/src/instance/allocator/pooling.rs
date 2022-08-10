@@ -26,6 +26,8 @@ use wasmtime_environ::{
 mod index_allocator;
 use index_allocator::{PoolingAllocationState, SlotId};
 
+mod lazy_pool;
+
 cfg_if::cfg_if! {
     if #[cfg(windows)] {
         mod windows;
@@ -180,6 +182,8 @@ pub enum PoolingAllocationStrategy {
     /// the same module, potentially enabling faster instantiation by
     /// reusing e.g. memory mappings.
     ReuseAffinity,
+    /// Lazy clean
+    LazyClean,
 }
 
 impl Default for PoolingAllocationStrategy {
@@ -937,7 +941,7 @@ impl StackPool {
             // same compiled module with the same image (they always
             // start zeroed just the same for everyone).
             index_allocator: Mutex::new(PoolingAllocationState::new(
-                PoolingAllocationStrategy::NextAvailable,
+                PoolingAllocationStrategy::LazyClean,
                 max_instances,
             )),
         })

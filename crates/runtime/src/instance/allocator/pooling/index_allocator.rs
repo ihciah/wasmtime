@@ -1,13 +1,13 @@
 //! Index/slot allocator policies for the pooling allocator.
 
-use super::PoolingAllocationStrategy;
+use super::{lazy_pool::LazyPool, PoolingAllocationStrategy};
 use crate::CompiledModuleId;
 use rand::Rng;
 use std::collections::HashMap;
 
 /// A slot index. The job of this allocator is to hand out these
 /// indices.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SlotId(pub usize);
 impl SlotId {
     /// The index of this slot.
@@ -75,6 +75,7 @@ pub(crate) enum PoolingAllocationState {
         /// indices are kept up-to-date to allow fast removal.
         slot_state: Vec<SlotState>,
     },
+    LazyClean(LazyPool),
 }
 
 #[derive(Clone, Debug)]
@@ -264,6 +265,9 @@ impl PoolingAllocationState {
                     })
                     .collect(),
             },
+            PoolingAllocationStrategy::LazyClean => {
+                PoolingAllocationState::LazyClean(LazyPool::new(ids, max_instances))
+            }
         }
     }
 
@@ -273,6 +277,7 @@ impl PoolingAllocationState {
             &PoolingAllocationState::NextAvailable(ref free_list)
             | &PoolingAllocationState::Random(ref free_list) => free_list.is_empty(),
             &PoolingAllocationState::ReuseAffinity { ref free_list, .. } => free_list.is_empty(),
+            &PoolingAllocationState::LazyClean(ref lazy) => lazy.is_empty(),
         }
     }
 
@@ -348,6 +353,7 @@ impl PoolingAllocationState {
                     slot_id
                 }
             }
+            &mut PoolingAllocationState::LazyClean(ref mut lazy) => lazy.alloc(),
         }
     }
 
@@ -382,6 +388,7 @@ impl PoolingAllocationState {
                         SlotState::Free(FreeSlotState::NoAffinity { free_list_index });
                 }
             }
+            &mut PoolingAllocationState::LazyClean(ref mut lazy) => lazy.free(index),
         }
     }
 
