@@ -249,7 +249,12 @@ fn remove_module_free_list_item(
 
 impl PoolingAllocationState {
     /// Create the default state for this strategy.
-    pub(crate) fn new(strategy: PoolingAllocationStrategy, max_instances: usize) -> Self {
+    pub(crate) fn new(
+        strategy: PoolingAllocationStrategy,
+        max_instances: usize,
+        stack_size: usize,
+        base: usize,
+    ) -> Self {
         let ids = (0..max_instances).map(|i| SlotId(i)).collect::<Vec<_>>();
         match strategy {
             PoolingAllocationStrategy::NextAvailable => PoolingAllocationState::NextAvailable(ids),
@@ -265,9 +270,9 @@ impl PoolingAllocationState {
                     })
                     .collect(),
             },
-            PoolingAllocationStrategy::LazyClean => {
-                PoolingAllocationState::LazyClean(LazyPool::new(ids, max_instances))
-            }
+            PoolingAllocationStrategy::LazyClean => PoolingAllocationState::LazyClean(
+                LazyPool::new(ids, max_instances, stack_size, base),
+            ),
         }
     }
 
@@ -432,20 +437,20 @@ mod test {
     #[test]
     fn test_next_available_allocation_strategy() {
         let strat = PoolingAllocationStrategy::NextAvailable;
-        let mut state = PoolingAllocationState::new(strat, 10);
+        let mut state = PoolingAllocationState::new(strat, 10, 0, 0);
         assert_eq!(state.alloc(None).index(), 9);
-        let mut state = PoolingAllocationState::new(strat, 5);
+        let mut state = PoolingAllocationState::new(strat, 5, 0, 0);
         assert_eq!(state.alloc(None).index(), 4);
-        let mut state = PoolingAllocationState::new(strat, 1);
+        let mut state = PoolingAllocationState::new(strat, 1, 0, 0);
         assert_eq!(state.alloc(None).index(), 0);
     }
 
     #[test]
     fn test_random_allocation_strategy() {
         let strat = PoolingAllocationStrategy::Random;
-        let mut state = PoolingAllocationState::new(strat, 100);
+        let mut state = PoolingAllocationState::new(strat, 100, 0, 0);
         assert!(state.alloc(None).index() < 100);
-        let mut state = PoolingAllocationState::new(strat, 1);
+        let mut state = PoolingAllocationState::new(strat, 1, 0, 0);
         assert_eq!(state.alloc(None).index(), 0);
     }
 
@@ -455,7 +460,7 @@ mod test {
         let id_alloc = CompiledModuleIdAllocator::new();
         let id1 = id_alloc.alloc();
         let id2 = id_alloc.alloc();
-        let mut state = PoolingAllocationState::new(strat, 100);
+        let mut state = PoolingAllocationState::new(strat, 100, 0, 0);
 
         let index1 = state.alloc(Some(id1));
         assert!(index1.index() < 100);
@@ -514,7 +519,7 @@ mod test {
         let ids = std::iter::repeat_with(|| id_alloc.alloc())
             .take(10)
             .collect::<Vec<_>>();
-        let mut state = PoolingAllocationState::new(strat, 1000);
+        let mut state = PoolingAllocationState::new(strat, 1000, 0, 0);
         let mut allocated: Vec<SlotId> = vec![];
         let mut last_id = vec![None; 1000];
 

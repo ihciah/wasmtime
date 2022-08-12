@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use priority_queue::PriorityQueue;
 use slab::Slab;
 
@@ -13,27 +11,36 @@ type Range = (SlotId, SlotId);
 #[derive(Clone, Debug)]
 pub(crate) struct LazyPool {
     max_instances: usize,
+    stack_size: usize,
+    base: usize,
+
     // slab id -> range
     dirty_ranges_slab: Slab<Range>,
     // begin -> slab id
-    dirty_begin_mapping: HashMap<SlotId, usize>,
+    dirty_begin_mapping: Vec<Option<usize>>,
     // end -> slab id
-    dirty_end_mapping: HashMap<SlotId, usize>,
+    dirty_end_mapping: Vec<Option<usize>>,
     // slab id with priority len_hint
     dirty_ranges: PriorityQueue<usize, usize>,
     clean: Vec<SlotId>,
-    // TODO: more fields for calling decommit, for example, how to calcalate
-    // pointer and length.
 }
 
 impl LazyPool {
     /// Create LazyPool with given clean slots.
-    pub(crate) fn new(ids: Vec<SlotId>, max_instances: usize) -> Self {
+    pub(crate) fn new(
+        ids: Vec<SlotId>,
+        max_instances: usize,
+        stack_size: usize,
+        base: usize,
+    ) -> Self {
         Self {
             max_instances,
+            stack_size,
+            base,
+
             dirty_ranges_slab: Slab::with_capacity(max_instances),
-            dirty_begin_mapping: HashMap::new(),
-            dirty_end_mapping: HashMap::new(),
+            dirty_begin_mapping: vec![None; max_instances],
+            dirty_end_mapping: vec![None; max_instances],
             dirty_ranges: PriorityQueue::new(),
             clean: ids,
         }
@@ -55,11 +62,15 @@ impl LazyPool {
         // get largest range
         let (slab_id, _) = self.dirty_ranges.pop().unwrap();
         let (left, right) = self.dirty_ranges_slab.remove(slab_id);
-        self.dirty_begin_mapping.remove(&left);
-        self.dirty_end_mapping.remove(&right);
+        self.dirty_begin_mapping[left.0] = None;
+        self.dirty_end_mapping[right.0] = None;
 
         // clean it with madvise
-        // todo!();
+        let begin = left.0 * self.stack_size + self.base;
+        let len = (right.0 + 1 - left.0) * self.stack_size;
+        let tick = std::time::Instant::now();
+        crate::instance::allocator::pooling::decommit_stack_pages(begin as *mut u8, len).unwrap();
+        // println!("DEBUG: decommit in batch size {}, time {}ms", right.0 + 1 - left.0, tick.elapsed().as_millis());
 
         // put them to clean
         let ret = left;
@@ -74,50 +85,50 @@ impl LazyPool {
         let (mut slab_left, mut slab_right) = (None, None);
         // check prev and next
         if index.0 > 0 {
-            let prev = SlotId(index.0 - 1);
-            slab_left = self.dirty_end_mapping.remove(&prev);
+            let prev = index.0 - 1;
+            slab_left = self.dirty_end_mapping[prev].take();
         }
 
         if index.0 + 1 < self.max_instances {
-            let next = SlotId(index.0 + 1);
-            slab_right = self.dirty_begin_mapping.remove(&next);
+            let next = index.0 + 1;
+            slab_right = self.dirty_begin_mapping[next].take();
         }
 
         match (slab_left, slab_right) {
             (None, None) => {
                 // unable to merge
                 let slab_id = self.dirty_ranges_slab.insert((index, index));
-                self.dirty_begin_mapping.insert(index, slab_id);
-                self.dirty_end_mapping.insert(index, slab_id);
+                self.dirty_begin_mapping[index.0] = Some(slab_id);
+                self.dirty_end_mapping[index.0] = Some(slab_id);
                 self.dirty_ranges.push(slab_id, 1);
             }
             (Some(slab_id), None) => {
                 // merge with left
-                self.dirty_end_mapping.insert(index, slab_id);
-                let range = self.dirty_ranges_slab.get_mut(slab_id).unwrap();
+                self.dirty_end_mapping[index.0] = Some(slab_id);
+                let range = unsafe { self.dirty_ranges_slab.get_unchecked_mut(slab_id) };
                 range.1 = index;
                 let size = range.1 .0 - range.0 .0;
-                if size & 0x1111 == 0 {
+                if size & 0x11111 == 0 {
                     self.dirty_ranges.change_priority(&slab_id, size);
                 }
             }
             (None, Some(slab_id)) => {
                 // merge with right
-                self.dirty_begin_mapping.insert(index, slab_id);
-                let range = self.dirty_ranges_slab.get_mut(slab_id).unwrap();
+                self.dirty_begin_mapping[index.0] = Some(slab_id);
+                let range = unsafe { self.dirty_ranges_slab.get_unchecked_mut(slab_id) };
                 range.0 = index;
                 let size = range.1 .0 - range.0 .0;
-                if size & 0x1111 == 0 {
+                if size & 0x11111 == 0 {
                     self.dirty_ranges.change_priority(&slab_id, size);
                 }
             }
             (Some(left_slab_id), Some(right_slab_id)) => {
                 // merge with left and right
                 let right_range = self.dirty_ranges_slab.remove(right_slab_id);
-                let range = self.dirty_ranges_slab.get_mut(left_slab_id).unwrap();
+                let range = unsafe { self.dirty_ranges_slab.get_unchecked_mut(left_slab_id) };
                 range.1 = right_range.1;
                 let size = range.1 .0 - range.0 .0;
-                if size & 0x1111 == 0 {
+                if size & 0x11111 == 0 {
                     self.dirty_ranges.change_priority(&left_slab_id, size);
                 }
                 self.dirty_ranges.remove(&right_slab_id);

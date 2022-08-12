@@ -238,7 +238,12 @@ impl InstancePool {
             mapping,
             instance_size,
             max_instances,
-            index_allocator: Mutex::new(PoolingAllocationState::new(strategy, max_instances)),
+            index_allocator: Mutex::new(PoolingAllocationState::new(
+                strategy,
+                max_instances,
+                0,
+                0,
+            )),
             memories: MemoryPool::new(instance_limits, tunables)?,
             tables: TablePool::new(instance_limits)?,
         };
@@ -930,6 +935,8 @@ impl StackPool {
             }
         }
 
+        let base = mapping.as_ptr() as usize;
+
         Ok(Self {
             mapping,
             stack_size,
@@ -940,9 +947,17 @@ impl StackPool {
             // here: stacks do not benefit from being allocated to the
             // same compiled module with the same image (they always
             // start zeroed just the same for everyone).
+            // index_allocator: Mutex::new(PoolingAllocationState::new(
+            //     PoolingAllocationStrategy::NextAvailable,
+            //     max_instances,
+            //     stack_size,
+            //     base,
+            // )),
             index_allocator: Mutex::new(PoolingAllocationState::new(
                 PoolingAllocationStrategy::LazyClean,
                 max_instances,
+                stack_size,
+                base,
             )),
         })
     }
@@ -1001,7 +1016,8 @@ impl StackPool {
         let index = (start_of_stack - base) / self.stack_size;
         assert!(index < self.max_instances);
 
-        decommit_stack_pages(bottom_of_stack as _, stack_size).unwrap();
+        // println!("DEBUG: deallocate fiber stack");
+        // decommit_stack_pages(bottom_of_stack as _, stack_size).unwrap();
 
         self.index_allocator.lock().unwrap().free(SlotId(index));
     }
